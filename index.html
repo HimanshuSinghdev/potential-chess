@@ -13,29 +13,34 @@
 
   Libraries:
    - chess.js 0.10.3 (loaded from cdnjs) → move generation / game rules
-   - stockfish.js 19, "lite-single" build → the AI
+   - stockfish.js 19, pure-JavaScript "asm.js" build → the AI
 
-  IMPORTANT — the engine is NOT loaded from a CDN. Every CDN option
-  (jsDelivr, unpkg, GitHub release assets) turned out to have some
-  dealbreaker for this exact file — package too large, missing CORS
-  headers, or similar — so the two engine files are shipped as plain
-  files sitting next to this HTML instead:
-    - stockfish-19-lite-single.js
-    - stockfish-19-lite-single.wasm
-  Keep all three files together in the same folder wherever you host
-  this (GitHub Pages, Netlify, Vercel, or just opening it locally).
-  That also means zero network dependency for the AI itself — only
+  IMPORTANT — the engine is NOT loaded from a CDN, and it is NOT
+  WebAssembly. Both of those were tried and dropped for real reasons:
+   - CDNs: every option tried (jsDelivr, unpkg, GitHub release assets)
+     had a dealbreaker for this exact file — package too large to
+     serve, or missing CORS headers — so the engine ships as a plain
+     file sitting next to this HTML instead: stockfish-19-asm.js.
+     Keep it in the same folder wherever you host this (GitHub Pages,
+     Netlify, Vercel, or just opening the file locally).
+   - WebAssembly: browsers require a site's Content-Security-Policy to
+     include 'wasm-unsafe-eval' before WASM is allowed to run at all.
+     Since this file may end up hosted somewhere that sets a strict
+     CSP outside of our control, the WASM build was swapped for this
+     pure-JS "asm.js" build, which still has the same NNUE evaluation
+     but never touches eval/WASM — so no CSP setting can block it.
+     The trade-off is a slower engine (no WASM/SIMD speedups), which
+     is why moves are budgeted by *time* rather than a fixed depth —
+     see SEARCH_MOVETIME_MS below.
+
+  This also means zero network dependency for the AI itself — only
   the two Google Fonts above need internet.
 
-  Why the "lite-single" build specifically: "single" means no special
-  cross-origin-isolation (COOP/COEP) response headers are required;
-  "lite" keeps the WASM file under 2MB.
-
   Resilience: if the Stockfish worker ever fails to load (e.g. the
-  a CDN hiccup, an ad-blocker, etc.) the app automatically falls
-  back to a lightweight built-in move-picker so the game still
-  works — you'll see a small notice in the sidebar when that
-  happens.
+  file wasn't uploaded, or the browser blocks workers entirely) the
+  app automatically falls back to a lightweight built-in move-picker
+  so the game still works — you'll see a small notice in the sidebar
+  when that happens.
 -->
 <style>
   :root{
@@ -438,10 +443,14 @@
      CONFIG
   ============================================================ */
   // Loaded from the SAME FOLDER as this HTML file — not a CDN.
-  // Keep stockfish-19-lite-single.js and stockfish-19-lite-single.wasm
-  // sitting right next to this file wherever you host it.
-  var STOCKFISH_JS_URL = "stockfish-19-lite-single.js";
-  var SEARCH_DEPTH = 18;           // engine strength — deep enough to be effectively unbeatable
+  // Keep stockfish-19-asm.js sitting right next to this file wherever
+  // you host it.
+  var STOCKFISH_JS_URL = "stockfish-19-asm.js";
+  var SEARCH_MOVETIME_MS = 4000;   // engine "thinking time" per move, in ms.
+                                    // A time budget (rather than a fixed depth) is the right
+                                    // knob for a pure-JS engine, since raw speed varies a lot
+                                    // from phone to phone. Raise this for a stronger but
+                                    // slower engine, lower it for snappier but weaker play.
   var ENGINE_INIT_TIMEOUT_MS = 15000;
 
   var FILES = "abcdefgh";
@@ -871,7 +880,7 @@
       }
       engineWorker.addEventListener("message", onMsg);
       postToEngine("position fen " + fen);
-      postToEngine("go depth " + SEARCH_DEPTH);
+      postToEngine("go movetime " + SEARCH_MOVETIME_MS);
     });
   }
 
@@ -966,11 +975,11 @@
 
   initEngine().then(function(ok){
     if (ok){
-      engineNoteEl.innerHTML = "<b>Engine ready.</b> Playing at full strength (depth " + SEARCH_DEPTH + ").";
+      engineNoteEl.innerHTML = "<b>Engine ready.</b> Thinking for " + (SEARCH_MOVETIME_MS / 1000) + "s per move at full strength.";
       engineNoteEl.classList.remove("warn");
     } else {
       engineBroken = true;
-      engineNoteEl.innerHTML = "<b>Engine failed to load.</b> Playing with a lightweight built-in fallback instead — make sure stockfish-19-lite-single.js and .wasm are uploaded in the same folder as this page, then reload.";
+      engineNoteEl.innerHTML = "<b>Engine failed to load.</b> Playing with a lightweight built-in fallback instead — make sure stockfish-19-asm.js is uploaded in the same folder as this page, then reload.";
       engineNoteEl.classList.add("warn");
     }
   });
