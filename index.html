@@ -20,8 +20,14 @@
   required, so it runs as-is on plain static hosts like GitHub Pages,
   Netlify or Vercel with zero configuration; "lite" keeps the WASM
   download under 2MB, which matters on mobile connections. The file
-  paths below were confirmed directly against the published npm
-  package contents, not guessed.
+  paths were confirmed directly against the published npm package
+  contents, not guessed.
+
+  Loading it is two steps, not one — browsers block `new Worker(url)`
+  for any cross-origin script outright, regardless of CORS headers.
+  So the engine script is fetched as text first (fetch() does honor
+  CORS), wrapped in a same-origin Blob, and *that* is handed to
+  Worker(). See initEngine() below for the details.
 
   Resilience: if the Stockfish worker ever fails to load (offline,
   a CDN hiccup, an ad-blocker, etc.) the app automatically falls
@@ -429,9 +435,10 @@
   /* ============================================================
      CONFIG
   ============================================================ */
-  var STOCKFISH_URL = "https://cdn.jsdelivr.net/npm/stockfish@19.0.0/bin/stockfish-19-lite-single.js";
-  var SEARCH_DEPTH = 16;          // engine strength — plenty deep to be effectively unbeatable
-  var ENGINE_INIT_TIMEOUT_MS = 9000;
+  var STOCKFISH_JS_URL = "https://cdn.jsdelivr.net/npm/stockfish@19.0.0/bin/stockfish-19-lite-single.js";
+  var STOCKFISH_WASM_URL = "https://cdn.jsdelivr.net/npm/stockfish@19.0.0/bin/stockfish-19-lite-single.wasm";
+  var SEARCH_DEPTH = 18;           // engine strength — deep enough to be effectively unbeatable
+  var ENGINE_INIT_TIMEOUT_MS = 15000;
 
   var FILES = "abcdefgh";
   var PIECE_GLYPH = {
@@ -806,6 +813,14 @@
     return typeof e.data === "string" ? e.data : (e.data && e.data.data) || "";
   }
 
+  // Browsers refuse `new Worker(url)` for a cross-origin script URL
+  // outright, no matter what the CDN's CORS headers say. The fix is
+  // to fetch the engine's JS ourselves (fetch() *does* honor CORS),
+  // wrap it in a same-origin Blob, and hand that to Worker() instead.
+  // The Stockfish loader supports being told where its .wasm file
+  // lives via a URL fragment, which is what lets a blob: worker
+  // (which has no real path of its own) still find the real binary
+  // on the CDN.
   function initEngine(){
     return new Promise(function(resolve){
       var settled = false;
@@ -815,31 +830,46 @@
         resolve(ok);
       }
 
-      try {
-        engineWorker = new Worker(STOCKFISH_URL);
-      } catch (err){
-        finish(false);
-        return;
-      }
-
       var timeout = window.setTimeout(function(){ finish(false); }, ENGINE_INIT_TIMEOUT_MS);
 
-      function onMsg(e){
-        var line = readLine(e);
-        if (line.indexOf("uciok") !== -1){
-          postToEngine("setoption name Skill Level value 20");
-          postToEngine("isready");
-        } else if (line.indexOf("readyok") !== -1){
-          engineWorker.removeEventListener("message", onMsg);
-          window.clearTimeout(timeout);
-          engineReady = true;
-          finish(true);
-        }
-      }
+      fetch(STOCKFISH_JS_URL, { mode: "cors" })
+        .then(function(res){
+          if (!res.ok) throw new Error("engine script HTTP " + res.status);
+          return res.text();
+        })
+        .then(function(code){
+          var blob = new Blob([code], { type: "application/javascript" });
+          var blobUrl = URL.createObjectURL(blob) + "#" + STOCKFISH_WASM_URL;
 
-      engineWorker.addEventListener("message", onMsg);
-      engineWorker.addEventListener("error", function(){ window.clearTimeout(timeout); finish(false); });
-      postToEngine("uci");
+          try {
+            engineWorker = new Worker(blobUrl);
+          } catch (err){
+            finish(false);
+            return;
+          }
+
+          function onMsg(e){
+            var line = readLine(e);
+            if (line.indexOf("uciok") !== -1){
+              postToEngine("setoption name Skill Level value 20");
+              postToEngine("setoption name Hash value 32");
+              postToEngine("isready");
+            } else if (line.indexOf("readyok") !== -1){
+              engineWorker.removeEventListener("message", onMsg);
+              window.clearTimeout(timeout);
+              engineReady = true;
+              finish(true);
+            }
+          }
+
+          engineWorker.addEventListener("message", onMsg);
+          engineWorker.addEventListener("error", function(){ window.clearTimeout(timeout); finish(false); });
+          postToEngine("uci");
+        })
+        .catch(function(){
+          window.clearTimeout(timeout);
+          finish(false);
+        });
     });
   }
 
