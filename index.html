@@ -3,8 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net;">
-
 <title>Chess — vs. Engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,25 +11,27 @@
   ── Chess vs. Engine ──────────────────────────────────────────────
   Single-file, zero-backend chess app.
 
-  Libraries (CDN):
-   - chess.js 0.10.3 (cdnjs)  → move generation / game rules
-   - stockfish.js 19, "lite-single" build (jsdelivr) → the AI
+  Libraries:
+   - chess.js 0.10.3 (loaded from cdnjs) → move generation / game rules
+   - stockfish.js 19, "lite-single" build → the AI
 
-  Why the "lite-single" Stockfish build specifically: "single" means
-  no special cross-origin-isolation (COOP/COEP) response headers are
-  required, so it runs as-is on plain static hosts like GitHub Pages,
-  Netlify or Vercel with zero configuration; "lite" keeps the WASM
-  download under 2MB, which matters on mobile connections. The file
-  paths were confirmed directly against the published npm package
-  contents, not guessed.
+  IMPORTANT — the engine is NOT loaded from a CDN. Every CDN option
+  (jsDelivr, unpkg, GitHub release assets) turned out to have some
+  dealbreaker for this exact file — package too large, missing CORS
+  headers, or similar — so the two engine files are shipped as plain
+  files sitting next to this HTML instead:
+    - stockfish-19-lite-single.js
+    - stockfish-19-lite-single.wasm
+  Keep all three files together in the same folder wherever you host
+  this (GitHub Pages, Netlify, Vercel, or just opening it locally).
+  That also means zero network dependency for the AI itself — only
+  the two Google Fonts above need internet.
 
-  Loading it is two steps, not one — browsers block `new Worker(url)`
-  for any cross-origin script outright, regardless of CORS headers.
-  So the engine script is fetched as text first (fetch() does honor
-  CORS), wrapped in a same-origin Blob, and *that* is handed to
-  Worker(). See initEngine() below for the details.
+  Why the "lite-single" build specifically: "single" means no special
+  cross-origin-isolation (COOP/COEP) response headers are required;
+  "lite" keeps the WASM file under 2MB.
 
-  Resilience: if the Stockfish worker ever fails to load (offline,
+  Resilience: if the Stockfish worker ever fails to load (e.g. the
   a CDN hiccup, an ad-blocker, etc.) the app automatically falls
   back to a lightweight built-in move-picker so the game still
   works — you'll see a small notice in the sidebar when that
@@ -437,9 +437,10 @@
   /* ============================================================
      CONFIG
   ============================================================ */
-  var STOCKFISH_JS_URL = "https://cloudflare.com";
-  var STOCKFISH_WASM_URL = "";
-
+  // Loaded from the SAME FOLDER as this HTML file — not a CDN.
+  // Keep stockfish-19-lite-single.js and stockfish-19-lite-single.wasm
+  // sitting right next to this file wherever you host it.
+  var STOCKFISH_JS_URL = "stockfish-19-lite-single.js";
   var SEARCH_DEPTH = 18;           // engine strength — deep enough to be effectively unbeatable
   var ENGINE_INIT_TIMEOUT_MS = 15000;
 
@@ -816,14 +817,9 @@
     return typeof e.data === "string" ? e.data : (e.data && e.data.data) || "";
   }
 
-  // Browsers refuse `new Worker(url)` for a cross-origin script URL
-  // outright, no matter what the CDN's CORS headers say. The fix is
-  // to fetch the engine's JS ourselves (fetch() *does* honor CORS),
-  // wrap it in a same-origin Blob, and hand that to Worker() instead.
-  // The Stockfish loader supports being told where its .wasm file
-  // lives via a URL fragment, which is what lets a blob: worker
-  // (which has no real path of its own) still find the real binary
-  // on the CDN.
+  // Same-origin load — the engine files sit right next to this HTML
+  // file, so there's no CORS or cross-origin Worker restriction to
+  // work around here.
   function initEngine(){
     return new Promise(function(resolve){
       var settled = false;
@@ -833,46 +829,32 @@
         resolve(ok);
       }
 
+      try {
+        engineWorker = new Worker(STOCKFISH_JS_URL);
+      } catch (err){
+        finish(false);
+        return;
+      }
+
       var timeout = window.setTimeout(function(){ finish(false); }, ENGINE_INIT_TIMEOUT_MS);
 
-      fetch(STOCKFISH_JS_URL, { mode: "cors" })
-        .then(function(res){
-          if (!res.ok) throw new Error("engine script HTTP " + res.status);
-          return res.text();
-        })
-        .then(function(code){
-          var blob = new Blob([code], { type: "application/javascript" });
-          var blobUrl = URL.createObjectURL(blob) + "#" + STOCKFISH_WASM_URL;
-
-          try {
-            engineWorker = new Worker(blobUrl);
-          } catch (err){
-            finish(false);
-            return;
-          }
-
-          function onMsg(e){
-            var line = readLine(e);
-            if (line.indexOf("uciok") !== -1){
-              postToEngine("setoption name Skill Level value 20");
-              postToEngine("setoption name Hash value 32");
-              postToEngine("isready");
-            } else if (line.indexOf("readyok") !== -1){
-              engineWorker.removeEventListener("message", onMsg);
-              window.clearTimeout(timeout);
-              engineReady = true;
-              finish(true);
-            }
-          }
-
-          engineWorker.addEventListener("message", onMsg);
-          engineWorker.addEventListener("error", function(){ window.clearTimeout(timeout); finish(false); });
-          postToEngine("uci");
-        })
-        .catch(function(){
+      function onMsg(e){
+        var line = readLine(e);
+        if (line.indexOf("uciok") !== -1){
+          postToEngine("setoption name Skill Level value 20");
+          postToEngine("setoption name Hash value 32");
+          postToEngine("isready");
+        } else if (line.indexOf("readyok") !== -1){
+          engineWorker.removeEventListener("message", onMsg);
           window.clearTimeout(timeout);
-          finish(false);
-        });
+          engineReady = true;
+          finish(true);
+        }
+      }
+
+      engineWorker.addEventListener("message", onMsg);
+      engineWorker.addEventListener("error", function(){ window.clearTimeout(timeout); finish(false); });
+      postToEngine("uci");
     });
   }
 
@@ -988,7 +970,7 @@
       engineNoteEl.classList.remove("warn");
     } else {
       engineBroken = true;
-      engineNoteEl.innerHTML = "<b>Engine failed to load.</b> Playing with a lightweight built-in fallback instead — check your connection and reload for full strength.";
+      engineNoteEl.innerHTML = "<b>Engine failed to load.</b> Playing with a lightweight built-in fallback instead — make sure stockfish-19-lite-single.js and .wasm are uploaded in the same folder as this page, then reload.";
       engineNoteEl.classList.add("warn");
     }
   });
