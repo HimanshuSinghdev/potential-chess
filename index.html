@@ -41,6 +41,14 @@
   app automatically falls back to a lightweight built-in move-picker
   so the game still works — you'll see a small notice in the sidebar
   when that happens.
+
+  Post-game report: when the game ends, the engine re-scores every
+  position that occurred and grades each of your moves by how much
+  evaluation you gave up compared to the engine's own assessment.
+  That produces an accuracy %, a move-quality breakdown (best / good
+  / inaccuracy / mistake / blunder — also shown as dots in the move
+  log), and a rough estimated rating band. This is a transparent,
+  informal approximation, not an official Elo rating.
 -->
 <style>
   :root{
@@ -58,6 +66,12 @@
     --accent-soft: #e9d6ae;
     --good: #5c8264;
     --bad: #ae5b52;
+    --panel-alt: #eeece2;
+    --q-best: #3d6b47;      --q-best-bg: #e1ede2;
+    --q-good: #4c7d4a;      --q-good-bg: #e9f1e4;
+    --q-inaccuracy: #93711f; --q-inaccuracy-bg: #f5ecd6;
+    --q-mistake: #a15a2f;    --q-mistake-bg: #f6e3d3;
+    --q-blunder: #a13a34;    --q-blunder-bg: #f6dbd8;
     --radius-lg: 20px;
     --radius-md: 12px;
     --radius-sm: 8px;
@@ -186,15 +200,19 @@
 
   .square .dot{
     position:absolute;
+    top:50%; left:50%;
     width: 24%;
     height:24%;
+    margin:0;
     border-radius:50%;
     background: rgba(30,30,30,.28);
     pointer-events:none;
+    transform: translate(-50%, -50%);
   }
   .square .ring{
     position:absolute;
     inset: 6%;
+    margin:0;
     border-radius:50%;
     box-shadow: inset 0 0 0 5px rgba(30,30,30,.28);
     pointer-events:none;
@@ -328,11 +346,25 @@
 
   .movelist .num{ color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   .movelist .mv{
-    padding: 2px 6px;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    padding: 3px 6px;
     border-radius: 5px;
     font-variant-numeric: tabular-nums;
+    min-height: 22px;
   }
   .movelist .mv.current{ background: var(--accent-soft); }
+  .movelist .mv .qdot{
+    width:6px; height:6px;
+    border-radius:50%;
+    flex:none;
+  }
+  .movelist .mv .qdot.q-best{ background: var(--q-best); }
+  .movelist .mv .qdot.q-good{ background: var(--q-good); }
+  .movelist .mv .qdot.q-inaccuracy{ background: var(--q-inaccuracy); }
+  .movelist .mv .qdot.q-mistake{ background: var(--q-mistake); }
+  .movelist .mv .qdot.q-blunder{ background: var(--q-blunder); }
   .movelist .empty{
     grid-column: 1 / -1;
     color: var(--ink-soft);
@@ -363,8 +395,10 @@
     background: var(--panel);
     border-radius: var(--radius-lg);
     padding: 34px 32px;
-    max-width: 360px;
+    max-width: 380px;
     width:100%;
+    max-height: 88vh;
+    overflow-y: auto;
     text-align:center;
     box-shadow: var(--shadow-deep);
     animation: pop .22s cubic-bezier(.2,.8,.3,1.2);
@@ -379,10 +413,92 @@
     margin: 0 0 8px;
     color: var(--ink);
   }
-  .modal-card p{
-    margin: 0 0 22px;
+  .modal-card p.modal-text{
+    margin: 0 0 20px;
     color: var(--ink-soft);
     font-size: 14.5px;
+  }
+
+  /* ---------- game report ---------- */
+  .report{
+    margin: 0 0 22px;
+    padding: 18px 4px 4px;
+    border-top: 1px solid var(--panel-line);
+  }
+  .report-loading{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    color: var(--ink-soft);
+    font-size: 13.5px;
+    padding: 14px 0;
+  }
+  .spinner{
+    width:16px; height:16px;
+    border-radius:50%;
+    border:2px solid var(--panel-line);
+    border-top-color: var(--accent);
+    flex:none;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  .report-results{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:12px;
+  }
+  .report-accuracy{
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+  }
+  .accuracy-value{
+    font-family:'Fraunces', serif;
+    font-weight:600;
+    font-size: 42px;
+    line-height:1;
+    color: var(--ink);
+  }
+  .accuracy-label{
+    font-size: 12px;
+    font-weight:700;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+    color: var(--ink-soft);
+  }
+  .report-rating{
+    font-size: 13.5px;
+    color: var(--ink-soft);
+  }
+  .report-rating b{ color: var(--ink); }
+  .report-breakdown{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:6px;
+  }
+  .chip{
+    font-size: 11.5px;
+    font-weight:700;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--panel-alt);
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .chip.c-best{ color: var(--q-best); background: var(--q-best-bg); }
+  .chip.c-good{ color: var(--q-good); background: var(--q-good-bg); }
+  .chip.c-inaccuracy{ color: var(--q-inaccuracy); background: var(--q-inaccuracy-bg); }
+  .chip.c-mistake{ color: var(--q-mistake); background: var(--q-mistake-bg); }
+  .chip.c-blunder{ color: var(--q-blunder); background: var(--q-blunder-bg); }
+  .report-unavailable{
+    color: var(--ink-soft);
+    font-size: 13px;
+    line-height:1.5;
+    padding: 8px 0;
   }
 </style>
 </head>
@@ -429,7 +545,24 @@
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal-card">
     <h2 id="modalTitle">Checkmate</h2>
-    <p id="modalText">Game over.</p>
+    <p class="modal-text" id="modalText">Game over.</p>
+
+    <div class="report" id="reportSection">
+      <div class="report-loading" id="reportLoading">
+        <span class="spinner"></span>
+        <span>Analyzing your moves…</span>
+      </div>
+      <div class="report-results" id="reportResults" style="display:none;">
+        <div class="report-accuracy">
+          <span class="accuracy-value" id="accuracyValue">—</span>
+          <span class="accuracy-label">Accuracy</span>
+        </div>
+        <p class="report-rating" id="reportRating">Estimated rating: —</p>
+        <div class="report-breakdown" id="reportBreakdown"></div>
+      </div>
+      <p class="report-unavailable" id="reportUnavailable" style="display:none;"></p>
+    </div>
+
     <button class="btn primary" id="modalNewGameBtn" style="width:100%;">Play again</button>
   </div>
 </div>
@@ -452,6 +585,7 @@
                                     // from phone to phone. Raise this for a stronger but
                                     // slower engine, lower it for snappier but weaker play.
   var ENGINE_INIT_TIMEOUT_MS = 15000;
+  var ANALYSIS_MOVETIME_MS = 300;  // per-position budget when scoring the finished game for the report
 
   var FILES = "abcdefgh";
   var PIECE_GLYPH = {
@@ -474,6 +608,10 @@
   var engineReady = false;
   var engineBroken = false;
 
+  var analysisRunning = false;
+  var analysisDone = false;
+  var moveQualities = {};        // ply index (0-based, matches game.history() order) → quality string
+
   /* ============================================================
      DOM refs
   ============================================================ */
@@ -488,6 +626,12 @@
   var modalTitle = document.getElementById("modalTitle");
   var modalText = document.getElementById("modalText");
   var modalNewGameBtn = document.getElementById("modalNewGameBtn");
+  var reportLoadingEl = document.getElementById("reportLoading");
+  var reportResultsEl = document.getElementById("reportResults");
+  var reportUnavailableEl = document.getElementById("reportUnavailable");
+  var accuracyValueEl = document.getElementById("accuracyValue");
+  var reportRatingEl = document.getElementById("reportRating");
+  var reportBreakdownEl = document.getElementById("reportBreakdown");
 
   /* ============================================================
      BOARD RENDERING
@@ -629,6 +773,12 @@
   /* ============================================================
      MOVE LIST
   ============================================================ */
+  function moveCellHtml(san, ply, isCurrent){
+    var quality = moveQualities[ply];
+    var dot = quality ? '<span class="qdot q-' + quality + '" title="' + quality + '"></span>' : "";
+    return '<div class="mv' + (isCurrent ? " current" : "") + '">' + dot + '<span>' + san + '</span></div>';
+  }
+
   function renderMoveList(){
     var history = game.history();
     if (history.length === 0){
@@ -643,8 +793,8 @@
       var isLastWhite = i === history.length - 1;
       var isLastBlack = i + 1 === history.length - 1;
       html += '<div class="num">' + moveNum + ".</div>";
-      html += '<div class="mv' + (isLastWhite ? " current" : "") + '">' + white + "</div>";
-      html += '<div class="mv' + (isLastBlack ? " current" : "") + '">' + (black || "") + "</div>";
+      html += moveCellHtml(white, i, isLastWhite);
+      html += black ? moveCellHtml(black, i + 1, isLastBlack) : '<div class="mv"></div>';
     }
     movelistEl.innerHTML = html;
     movelistEl.scrollTop = movelistEl.scrollHeight;
@@ -699,6 +849,7 @@
     modalTitle.textContent = title;
     modalText.textContent = text;
     modalOverlay.classList.add("show");
+    runGameAnalysis();
   }
 
   /* ============================================================
@@ -884,6 +1035,157 @@
     });
   }
 
+  /* ============================================================
+     GAME ANALYSIS — post-game accuracy / rating report
+     ------------------------------------------------------------
+     Method: replay the finished game and get the engine's own
+     evaluation of every position that occurred (one short search
+     per position, from the side-to-move's perspective). For each
+     of the player's moves, compare the evaluation right before the
+     move to the evaluation right after it (flipped to the player's
+     own perspective) — the drop is that move's "centipawn loss".
+     Averaging that loss over the game gives a standard, if informal,
+     read on move quality, which is what accuracy% and the estimated
+     rating band below are both derived from. This is NOT an official
+     Elo rating — no single-game metric can be — it's a rough,
+     transparent approximation so the numbers are worth learning from
+     rather than worth trusting literally.
+  ============================================================ */
+  function analyzePosition(fen){
+    return new Promise(function(resolve){
+      if (!engineWorker || !engineReady){ resolve(null); return; }
+      var lastScore = null;
+      function onMsg(e){
+        var line = readLine(e);
+        if (line.indexOf("info") === 0 && line.indexOf(" score ") !== -1){
+          var m = /score (cp|mate) (-?\d+)/.exec(line);
+          if (m){
+            if (m[1] === "cp"){
+              lastScore = parseInt(m[2], 10);
+            } else {
+              var mateIn = parseInt(m[2], 10);
+              lastScore = mateIn > 0 ? (100000 - mateIn) : (-100000 - mateIn);
+            }
+          }
+        } else if (line.indexOf("bestmove") === 0){
+          engineWorker.removeEventListener("message", onMsg);
+          resolve(lastScore);
+        }
+      }
+      engineWorker.addEventListener("message", onMsg);
+      postToEngine("position fen " + fen);
+      postToEngine("go movetime " + ANALYSIS_MOVETIME_MS);
+    });
+  }
+
+  function classifyLoss(loss){
+    if (loss <= 10) return "best";
+    if (loss <= 25) return "good";
+    if (loss <= 60) return "inaccuracy";
+    if (loss <= 150) return "mistake";
+    return "blunder";
+  }
+
+  function estimateRatingBand(acpl){
+    if (acpl <= 10) return "2400+";
+    if (acpl <= 20) return "2200–2400";
+    if (acpl <= 35) return "2000–2200";
+    if (acpl <= 55) return "1800–2000";
+    if (acpl <= 80) return "1600–1800";
+    if (acpl <= 120) return "1400–1600";
+    if (acpl <= 180) return "1100–1400";
+    if (acpl <= 260) return "800–1100";
+    return "under 800";
+  }
+
+  function chipHtml(label, count, cls){
+    return '<span class="chip c-' + cls + '">' + label + " " + count + "</span>";
+  }
+
+  function showReportUnavailable(message){
+    reportLoadingEl.style.display = "none";
+    reportResultsEl.style.display = "none";
+    reportUnavailableEl.style.display = "block";
+    reportUnavailableEl.textContent = message;
+  }
+
+  function finishAnalysis(movers, evals){
+    var losses = [];
+    var counts = { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+
+    for (var k = 0; k < movers.length; k++){
+      if (movers[k] !== playerColor) continue;
+      var eBefore = evals[k];
+      var eAfterRaw = evals[k + 1];
+      if (eBefore == null || eAfterRaw == null) continue;
+      var eAfter = -eAfterRaw;
+      var loss = Math.max(0, eBefore - eAfter);
+      var quality = classifyLoss(loss);
+      moveQualities[k] = quality;
+      counts[quality]++;
+      losses.push(loss);
+    }
+
+    analysisRunning = false;
+    analysisDone = true;
+
+    if (losses.length === 0){
+      showReportUnavailable("Not enough moves to analyze.");
+      return;
+    }
+
+    var acpl = losses.reduce(function(a, b){ return a + b; }, 0) / losses.length;
+    var accuracy = Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * acpl) - 3.1669));
+
+    reportLoadingEl.style.display = "none";
+    reportUnavailableEl.style.display = "none";
+    reportResultsEl.style.display = "flex";
+    accuracyValueEl.textContent = accuracy.toFixed(1) + "%";
+    reportRatingEl.innerHTML = "Estimated rating band: <b>" + estimateRatingBand(acpl) + "</b>";
+    reportBreakdownEl.innerHTML =
+      chipHtml("Best", counts.best, "best") +
+      chipHtml("Good", counts.good, "good") +
+      chipHtml("Inaccuracies", counts.inaccuracy, "inaccuracy") +
+      chipHtml("Mistakes", counts.mistake, "mistake") +
+      chipHtml("Blunders", counts.blunder, "blunder");
+
+    renderMoveList();
+  }
+
+  function runGameAnalysis(){
+    if (analysisRunning || analysisDone) return;
+
+    if (!engineReady || engineBroken){
+      analysisDone = true;
+      showReportUnavailable("Analysis isn't available for this game — the engine wasn't running, so there's nothing to score your moves against.");
+      return;
+    }
+
+    analysisRunning = true;
+
+    var verboseHistory = game.history({ verbose: true });
+    var replay = new Chess();
+    var fens = [replay.fen()];
+    verboseHistory.forEach(function(m){
+      replay.move(m.san);
+      fens.push(replay.fen());
+    });
+    var movers = verboseHistory.map(function(m){ return m.color; });
+    var evals = new Array(fens.length).fill(null);
+
+    function step(i){
+      if (i >= fens.length){
+        finishAnalysis(movers, evals);
+        return;
+      }
+      analyzePosition(fens[i]).then(function(score){
+        evals[i] = score;
+        step(i + 1);
+      });
+    }
+    step(0);
+  }
+
   /* ---------- fallback move picker (used only if Stockfish can't load) ---------- */
   var PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 
@@ -945,6 +1247,15 @@
   /* ============================================================
      GAME CONTROLS
   ============================================================ */
+  function resetAnalysisState(){
+    analysisRunning = false;
+    analysisDone = false;
+    moveQualities = {};
+    reportLoadingEl.style.display = "flex";
+    reportResultsEl.style.display = "none";
+    reportUnavailableEl.style.display = "none";
+  }
+
   function newGame(){
     game.reset();
     clearSelection();
@@ -952,6 +1263,7 @@
     aiThinking = false;
     pendingPromotion = null;
     modalOverlay.classList.remove("show");
+    resetAnalysisState();
     render();
     renderMoveList();
     refreshStatus();
